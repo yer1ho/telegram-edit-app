@@ -104,6 +104,8 @@
     const N8N_BASE_URL = 'https://95.182.114.206:8443/webhook'; 
     const urlParams = new URLSearchParams(window.location.search);
     const postId = urlParams.get('post_id');
+    const messageId = urlParams.get('message_id');
+    const chatId = urlParams.get('chat_id');
 
     // Функция вставки тегов по клику на кнопки
     function insertTag(tag) {
@@ -116,7 +118,6 @@
       const replacement = `<${tag}>${selectedText}</${tag}>`;
       textarea.value = text.substring(0, start) + replacement + text.substring(end);
       
-      // Возвращаем фокус и выделяем текст внутри тегов (или ставим курсор)
       textarea.focus();
       textarea.setSelectionRange(start + tag.length + 2, end + tag.length + 2);
       updatePreview();
@@ -144,7 +145,6 @@
     function updatePreview() {
       const text = document.getElementById('post-text').value;
       const previewBox = document.getElementById('preview-box');
-      // Вставляем как HTML, чтобы теги рендерились визуально
       previewBox.innerHTML = text;
     }
 
@@ -191,7 +191,7 @@
 
     loadPostData();
 
-    // Отправка отредактированного текста на воркфлоу сохранения (POST /telegram-edit)
+    // Отправка отредактированного текста и ID сообщения на воркфлоу сохранения (POST /telegram-edit)
     async function submitData() {
       const newText = document.getElementById('post-text').value;
       const saveBtn = document.getElementById('save-btn');
@@ -205,7 +205,9 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             post_id: postId,
-            text: newText
+            text: newText,
+            message_id: messageId,
+            chat_id: chatId
           })
         });
 
