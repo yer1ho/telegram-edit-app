@@ -46,7 +46,7 @@
     const urlParams = new URLSearchParams(window.location.search);
     const postId = urlParams.get('post_id');
 
-    // При открытии приложения подтягиваем текст из Google Sheets через n8n
+    // При открытии приложения запрашиваем текст с воркфлоу чтения (GET /get-post)
     async function loadPostData() {
       const textarea = document.getElementById('post-text');
 
@@ -56,8 +56,7 @@
       }
 
       try {
-        // Формируем корректный запрос к вебхуку n8n
-        const response = await fetch(`${N8N_BASE_URL}/telegram-edit?post_id=${encodeURIComponent(postId)}`);
+        const response = await fetch(`${N8N_BASE_URL}/get-post?post_id=${encodeURIComponent(postId)}`);
         
         if (!response.ok) {
           throw new Error(`Ошибка сервера (${response.status} ${response.statusText})`);
@@ -66,7 +65,7 @@
         const data = await response.json();
         console.log("Полученные данные от n8n:", data);
 
-        // Универсальное извлечение текста из различных форматов ответа n8n
+        // Универсальное извлечение текста из ответа
         let text = '';
         if (Array.isArray(data) && data.length > 0) {
           text = data[0].text || data[0].content || data[0].message || '';
@@ -88,7 +87,7 @@
 
     loadPostData();
 
-    // Отправка отредактированного текста обратно в n8n
+    // Отправка отредактированного текста на воркфлоу сохранения (POST /telegram-edit)
     async function submitData() {
       const newText = document.getElementById('post-text').value;
       const saveBtn = document.getElementById('save-btn');
