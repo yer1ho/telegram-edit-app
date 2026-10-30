@@ -12,39 +12,141 @@
       color: var(--tg-theme-text-color, #000000);
       margin: 0; padding: 16px; box-sizing: border-box;
     }
+    h3 {
+      margin-top: 0;
+      margin-bottom: 12px;
+    }
+    .toolbar {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+      flex-wrap: wrap;
+    }
+    .toolbar button {
+      padding: 6px 12px;
+      margin: 0;
+      width: auto;
+      font-size: 14px;
+      font-weight: 600;
+      background-color: var(--tg-theme-secondary-bg-color, #e0e0e0);
+      color: var(--tg-theme-text-color, #000000);
+      border-radius: 6px;
+      border: 1px solid rgba(0,0,0,0.1);
+      cursor: pointer;
+    }
+    .toolbar button:hover {
+      opacity: 0.8;
+    }
     textarea {
-      width: 100%; height: 250px; padding: 12px;
+      width: 100%; height: 200px; padding: 12px;
       border: 1px solid #ccc; border-radius: 8px; font-size: 15px;
       background-color: var(--tg-theme-secondary-bg-color, #f5f5f5);
       color: var(--tg-theme-text-color, #000000); box-sizing: border-box;
       resize: vertical;
+      font-family: inherit;
     }
-    button {
+    .preview-container {
+      margin-top: 14px;
+      border: 1px dashed #aaa;
+      border-radius: 8px;
+      padding: 12px;
+      background-color: var(--tg-theme-secondary-bg-color, #fafafa);
+    }
+    .preview-title {
+      font-size: 12px;
+      font-weight: bold;
+      color: #888;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+    }
+    #preview-box {
+      font-size: 15px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    #save-btn {
       width: 100%; padding: 14px; margin-top: 16px;
       background-color: var(--tg-theme-button-color, #2481cc);
       color: var(--tg-theme-button-text-color, #ffffff);
       border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer;
     }
-    button:disabled {
+    #save-btn:disabled {
       opacity: 0.6; cursor: not-allowed;
     }
   </style>
 </head>
 <body>
   <h3>Редактирование поста</h3>
-  <textarea id="post-text" placeholder="Загрузка текста из таблицы..."></textarea>
+
+  <!-- Панель быстрого форматирования тегов Telegram -->
+  <div class="toolbar">
+    <button type="button" onclick="insertTag('b')"><b>B</b></button>
+    <button type="button" onclick="insertTag('i')"><i>I</i></button>
+    <button type="button" onclick="insertTag('u')"><u>U</u></button>
+    <button type="button" onclick="insertTag('s')"><s>S</s></button>
+    <button type="button" onclick="insertLink()">🔗 Ссылка</button>
+  </div>
+
+  <textarea id="post-text" placeholder="Загрузка текста из таблицы..." oninput="updatePreview()"></textarea>
+
+  <!-- Блок живого превью -->
+  <div class="preview-container">
+    <div class="preview-title">Предпросмотр в Telegram:</div>
+    <div id="preview-box"></div>
+  </div>
+
   <button id="save-btn" onclick="submitData()">Сохранить и обновить</button>
 
   <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
-    // Базовый URL сервера n8n без конечных путей
     const N8N_BASE_URL = 'https://95.182.114.206:8443/webhook'; 
-
-    // Читаем post_id из URL параметров
     const urlParams = new URLSearchParams(window.location.search);
     const postId = urlParams.get('post_id');
+
+    // Функция вставки тегов по клику на кнопки
+    function insertTag(tag) {
+      const textarea = document.getElementById('post-text');
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selectedText = text.substring(start, end);
+
+      const replacement = `<${tag}>${selectedText}</${tag}>`;
+      textarea.value = text.substring(0, start) + replacement + text.substring(end);
+      
+      // Возвращаем фокус и выделяем текст внутри тегов (или ставим курсор)
+      textarea.focus();
+      textarea.setSelectionRange(start + tag.length + 2, end + tag.length + 2);
+      updatePreview();
+    }
+
+    // Функция вставки ссылки
+    function insertLink() {
+      const textarea = document.getElementById('post-text');
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selectedText = text.substring(start, end) || 'текст ссылки';
+
+      const url = prompt('Введите URL ссылки:', 'https://');
+      if (!url) return;
+
+      const replacement = `<a href="${url}">${selectedText}</a>`;
+      textarea.value = text.substring(0, start) + replacement + text.substring(end);
+      
+      textarea.focus();
+      updatePreview();
+    }
+
+    // Обновление живого превью
+    function updatePreview() {
+      const text = document.getElementById('post-text').value;
+      const previewBox = document.getElementById('preview-box');
+      // Вставляем как HTML, чтобы теги рендерились визуально
+      previewBox.innerHTML = text;
+    }
 
     // При открытии приложения запрашиваем текст с воркфлоу чтения (GET /get-post)
     async function loadPostData() {
@@ -52,6 +154,7 @@
 
       if (!postId) {
         textarea.value = "Ошибка: параметр post_id не найден в URL";
+        updatePreview();
         return;
       }
 
@@ -65,7 +168,6 @@
         const data = await response.json();
         console.log("Полученные данные от n8n:", data);
 
-        // Универсальное извлечение текста из ответа
         let text = '';
         if (Array.isArray(data) && data.length > 0) {
           text = data[0].text || data[0].content || data[0].message || '';
@@ -79,9 +181,11 @@
           textarea.value = '';
           textarea.placeholder = 'Текст поста пуст или не найден в ответе';
         }
+        updatePreview();
       } catch (err) {
         console.error(err);
         textarea.value = 'Не удалось загрузить текст: ' + err.message;
+        updatePreview();
       }
     }
 
