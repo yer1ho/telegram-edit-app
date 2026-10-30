@@ -32,27 +32,45 @@
 </head>
 <body>
   <h3>Редактирование поста</h3>
-  <textarea id="post-text" placeholder="Загрузка текста..."></textarea>
+  <textarea id="post-text" placeholder="Загрузка текста из таблицы..."></textarea>
   <button id="save-btn" onclick="submitData()">Сохранить и обновить</button>
 
   <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
-    // Ваш Production URL вебхука в n8n (куда отправляем отредактированный текст)
-    const N8N_WEBHOOK_URL = 'https://95.182.114.206:8443/webhook-test/telegram-edit';
+    // Замени на свои реальные Production URL вебхуков в n8n
+    const N8N_BASE_URL = 'https://95.182.114.206:8443/webhook'; 
 
-    // Читаем параметры из URL, которые передал Telegram при открытии Web App
+    // Читаем post_id из URL
     const urlParams = new URLSearchParams(window.location.search);
-    const chatId = urlParams.get('chat_id');
-    const messageId = urlParams.get('message_id');
-    const rawText = urlParams.get('text');
+    const postId = urlParams.get('post_id');
 
-    // Подставляем текст в textarea сразу при открытии
-    if (rawText) {
-      document.getElementById('post-text').value = decodeURIComponent(rawText);
+    // При открытии приложения подтягиваем текст из Google Sheets через n8n
+    async function loadPostData() {
+      if (!postId) {
+        document.getElementById('post-text').value = "Ошибка: не передан post_id";
+        return;
+      }
+
+      try {
+        const response = await fetch(`${N8N_BASE_URL}/get-post?post_id=${postId}`);
+        if (!response.ok) throw new Error('Не удалось получить данные');
+        
+        const data = await response.json();
+        // Ожидаем, что n8n вернет объект с полем text
+        const text = data.text || (Array.isArray(data) ? data[0]?.text : '');
+        
+        document.getElementById('post-text').value = text || '';
+      } catch (err) {
+        console.error(err);
+        document.getElementById('post-text').placeholder = 'Ошибка загрузки текста';
+      }
     }
 
+    loadPostData();
+
+    // Отправка отредактированного текста обратно в n8n
     async function submitData() {
       const newText = document.getElementById('post-text').value;
       const saveBtn = document.getElementById('save-btn');
@@ -61,12 +79,11 @@
       saveBtn.innerText = 'Сохранение...';
 
       try {
-        const response = await fetch(N8N_WEBHOOK_URL, {
+        const response = await fetch(`${N8N_BASE_URL}/telegram-edit`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            chat_id: chatId,
-            message_id: messageId,
+            post_id: postId,
             text: newText
           })
         });
