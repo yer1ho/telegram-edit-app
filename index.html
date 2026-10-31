@@ -22,7 +22,7 @@
       margin-bottom: 8px;
       flex-wrap: wrap;
     }
-    .toolbar button {
+    .toolbar button, .link-row button {
       padding: 6px 12px;
       margin: 0;
       width: auto;
@@ -34,8 +34,24 @@
       border: 1px solid rgba(0,0,0,0.1);
       cursor: pointer;
     }
-    .toolbar button:hover {
+    .toolbar button:hover, .link-row button:hover {
       opacity: 0.8;
+    }
+    .link-row {
+      display: flex;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .link-row input {
+      flex: 1;
+      min-width: 0;
+      padding: 6px 10px;
+      font-size: 14px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background-color: var(--tg-theme-secondary-bg-color, #f5f5f5);
+      color: var(--tg-theme-text-color, #000000);
+      box-sizing: border-box;
     }
     textarea {
       width: 100%; height: 200px; padding: 12px;
@@ -44,6 +60,16 @@
       color: var(--tg-theme-text-color, #000000); box-sizing: border-box;
       resize: vertical;
       font-family: inherit;
+    }
+    .counter {
+      margin-top: 6px;
+      font-size: 13px;
+      color: var(--tg-theme-hint-color, #888);
+      text-align: right;
+    }
+    .counter.over {
+      color: #d32f2f;
+      font-weight: 600;
     }
     .preview-container {
       margin-top: 14px;
@@ -64,8 +90,14 @@
       white-space: pre-wrap;
       word-break: break-word;
     }
+    #status {
+      margin-top: 12px;
+      font-size: 14px;
+      color: #d32f2f;
+      min-height: 18px;
+    }
     #save-btn {
-      width: 100%; padding: 14px; margin-top: 16px;
+      width: 100%; padding: 14px; margin-top: 8px;
       background-color: var(--tg-theme-button-color, #2481cc);
       color: var(--tg-theme-button-text-color, #ffffff);
       border: none; border-radius: 8px; font-size: 16px; font-weight: bold; cursor: pointer;
@@ -84,10 +116,16 @@
     <button type="button" onclick="insertTag('i')"><i>I</i></button>
     <button type="button" onclick="insertTag('u')"><u>U</u></button>
     <button type="button" onclick="insertTag('s')"><s>S</s></button>
-    <button type="button" onclick="insertLink()">🔗 Ссылка</button>
+    <button type="button" onclick="insertTag('code')">&lt;/&gt;</button>
   </div>
 
-  <textarea id="post-text" placeholder="Загрузка текста из таблицы..." oninput="updatePreview()"></textarea>
+  <div class="link-row">
+    <input id="link-url" type="url" inputmode="url" placeholder="https://..." autocomplete="off">
+    <button type="button" onclick="insertLink()">🔗 Вставить ссылку</button>
+  </div>
+
+  <textarea id="post-text" placeholder="Загрузка текста..." oninput="updatePreview()" disabled></textarea>
+  <div id="counter" class="counter"></div>
 
   <!-- Блок живого превью -->
   <div class="preview-container">
@@ -95,109 +133,165 @@
     <div id="preview-box"></div>
   </div>
 
-  <button id="save-btn" onclick="submitData()">Сохранить и обновить</button>
+  <div id="status"></div>
+  <button id="save-btn" onclick="confirmAndSubmit()" disabled>Опубликовать в канал</button>
 
   <script>
     const tg = window.Telegram.WebApp;
     tg.expand();
 
-    const N8N_BASE_URL = 'https://n8n.yeriho.top/webhook'; 
+    const N8N_BASE_URL = 'https://n8n.yeriho.top/webhook';
+    const CAPTION_LIMIT = 1024;
     const urlParams = new URLSearchParams(window.location.search);
     const postId = urlParams.get('post_id');
-    const messageId = urlParams.get('message_id');
-    const chatId = urlParams.get('chat_id');
+    const token = urlParams.get('t');
 
-    // Функция вставки тегов по клику на кнопки
+    const textarea = document.getElementById('post-text');
+    const previewBox = document.getElementById('preview-box');
+    const counterEl = document.getElementById('counter');
+    const statusEl = document.getElementById('status');
+    const saveBtn = document.getElementById('save-btn');
+
+    let ready = false;    // текст загружен и доступ подтверждён
+    let sending = false;  // идёт отправка
+
+    // Разрешённые Telegram теги. Всё остальное из предпросмотра вычищается,
+    // чтобы текст из LLM/YouTube не мог выполнить код в веб-аппе.
+    const ALLOWED_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'INS', 'S', 'STRIKE', 'DEL', 'A', 'CODE', 'PRE']);
+
+    function sanitize(html) {
+      const tpl = document.createElement('template'); // содержимое template не исполняется
+      tpl.innerHTML = html;
+      (function walk(node) {
+        Array.from(node.children).forEach(el => {
+          if (!ALLOWED_TAGS.has(el.tagName)) {
+            el.replaceWith(document.createTextNode(el.textContent));
+            return;
+          }
+          Array.from(el.attributes).forEach(attr => {
+            const isSafeHref = el.tagName === 'A' && attr.name === 'href' && /^https?:\/\//i.test(attr.value);
+            if (!isSafeHref) el.removeAttribute(attr.name);
+          });
+          walk(el);
+        });
+      })(tpl.content);
+      return tpl.innerHTML;
+    }
+
+    // Вставка тега вокруг выделения
     function insertTag(tag) {
-      const textarea = document.getElementById('post-text');
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       const text = textarea.value;
-      const selectedText = text.substring(start, end);
+      const selected = text.substring(start, end);
+      const open = `<${tag}>`;
+      const close = `</${tag}>`;
 
-      const replacement = `<${tag}>${selectedText}</${tag}>`;
-      textarea.value = text.substring(0, start) + replacement + text.substring(end);
-      
+      textarea.value = text.substring(0, start) + open + selected + close + text.substring(end);
       textarea.focus();
-      textarea.setSelectionRange(start + tag.length + 2, end + tag.length + 2);
+      textarea.setSelectionRange(start + open.length, start + open.length + selected.length);
       updatePreview();
     }
 
-    // Функция вставки ссылки
+    // Вставка ссылки: URL берётся из поля рядом с кнопкой (prompt() не везде работает в Telegram)
     function insertLink() {
-      const textarea = document.getElementById('post-text');
+      const urlInput = document.getElementById('link-url');
+      const url = urlInput.value.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        statusEl.textContent = 'Введите ссылку, которая начинается с http:// или https://';
+        return;
+      }
+      statusEl.textContent = '';
+
       const start = textarea.selectionStart;
       const end = textarea.selectionEnd;
       const text = textarea.value;
-      const selectedText = text.substring(start, end) || 'текст ссылки';
+      const label = text.substring(start, end) || 'ссылка';
+      const safeUrl = url.replace(/"/g, '&quot;');
+      const replacement = `<a href="${safeUrl}">${label}</a>`;
 
-      const url = prompt('Введите URL ссылки:', 'https://');
-      if (!url) return;
-
-      const replacement = `<a href="${url}">${selectedText}</a>`;
       textarea.value = text.substring(0, start) + replacement + text.substring(end);
-      
       textarea.focus();
+      urlInput.value = '';
       updatePreview();
     }
 
-    // Обновление живого превью
+    // Предпросмотр, счётчик символов и состояние кнопки
     function updatePreview() {
-      const text = document.getElementById('post-text').value;
-      const previewBox = document.getElementById('preview-box');
-      previewBox.innerHTML = text;
+      previewBox.innerHTML = sanitize(textarea.value);
+
+      const len = previewBox.textContent.length; // видимая длина без тегов
+      counterEl.textContent = `${len} / ${CAPTION_LIMIT}`;
+      counterEl.classList.toggle('over', len > CAPTION_LIMIT);
+
+      saveBtn.disabled = !ready || sending || len === 0 || len > CAPTION_LIMIT;
     }
 
-    // При открытии приложения запрашиваем текст с воркфлоу чтения (GET /get-post)
-    async function loadPostData() {
-      const textarea = document.getElementById('post-text');
+    function showFatal(message) {
+      ready = false;
+      textarea.value = '';
+      textarea.disabled = true;
+      textarea.placeholder = '';
+      statusEl.textContent = message;
+      updatePreview();
+    }
 
-      if (!postId) {
-        textarea.value = "Ошибка: параметр post_id не найден в URL";
-        updatePreview();
+    // Загрузка текста черновика (GET /get-post), нужен секрет t из ссылки кнопки
+    async function loadPostData() {
+      if (!postId || !token) {
+        showFatal('Ссылка неполная. Откройте редактор кнопкой под постом в боте.');
         return;
       }
 
       try {
-        const response = await fetch(`${N8N_BASE_URL}/get-post?post_id=${encodeURIComponent(postId)}`);
-        
+        const response = await fetch(
+          `${N8N_BASE_URL}/get-post?post_id=${encodeURIComponent(postId)}&t=${encodeURIComponent(token)}`
+        );
         if (!response.ok) {
-          throw new Error(`Ошибка сервера (${response.status} ${response.statusText})`);
+          throw new Error(`Ошибка сервера (${response.status})`);
         }
-        
+
         const data = await response.json();
-        console.log("Полученные данные от n8n:", data);
+        const item = Array.isArray(data) ? data[0] : data;
 
-        let text = '';
-        if (Array.isArray(data) && data.length > 0) {
-          text = data[0].text || data[0].content || data[0].message || '';
-        } else if (data && typeof data === 'object') {
-          text = data.text || data.content || data.message || '';
+        if (item && item.error === 'forbidden') {
+          showFatal('Нет доступа к этому черновику. Он мог быть уже опубликован или отклонён.');
+          return;
         }
 
-        if (text) {
-          textarea.value = text;
-        } else {
-          textarea.value = '';
-          textarea.placeholder = 'Текст поста пуст или не найден в ответе';
+        const text = item && item.text ? item.text : '';
+        if (!text) {
+          showFatal('Текст поста не найден. Возможно, черновик уже опубликован или удалён.');
+          return;
         }
+
+        textarea.value = text;
+        textarea.disabled = false;
+        ready = true;
         updatePreview();
       } catch (err) {
         console.error(err);
-        textarea.value = 'Не удалось загрузить текст: ' + err.message;
-        updatePreview();
+        showFatal('Не удалось загрузить текст: ' + err.message);
       }
     }
 
     loadPostData();
 
-    // Отправка отредактированного текста и ID сообщения на воркфлоу сохранения (POST /telegram-edit)
+    // Подтверждение перед публикацией: кнопка публикует пост в канал сразу
+    function confirmAndSubmit() {
+      if (typeof tg.showConfirm === 'function') {
+        tg.showConfirm('Опубликовать пост в канал?', ok => { if (ok) submitData(); });
+      } else if (confirm('Опубликовать пост в канал?')) {
+        submitData();
+      }
+    }
+
+    // Публикация (POST /telegram-edit): отправляем текст и секрет черновика
     async function submitData() {
-      const newText = document.getElementById('post-text').value;
-      const saveBtn = document.getElementById('save-btn');
-      
+      sending = true;
       saveBtn.disabled = true;
-      saveBtn.innerText = 'Сохранение...';
+      saveBtn.innerText = 'Публикация...';
+      statusEl.textContent = '';
 
       try {
         const response = await fetch(`${N8N_BASE_URL}/telegram-edit`, {
@@ -205,21 +299,21 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             post_id: postId,
-            text: newText,
-            message_id: messageId,
-            chat_id: chatId
+            t: token,
+            text: textarea.value
           })
         });
 
         if (!response.ok) {
           throw new Error(`Ошибка сервера (${response.status})`);
         }
-        
+
         tg.close();
       } catch (err) {
-        alert('Не удалось сохранить: ' + err.message);
-        saveBtn.disabled = false;
-        saveBtn.innerText = 'Сохранить и обновить';
+        statusEl.textContent = 'Не удалось опубликовать: ' + err.message;
+        sending = false;
+        saveBtn.innerText = 'Опубликовать в канал';
+        updatePreview();
       }
     }
   </script>
