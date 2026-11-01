@@ -236,7 +236,7 @@
       updatePreview();
     }
 
-    // Загрузка текста черновика (GET /get-post), нужен секрет t из ссылки кнопки
+    // Загрузка текста черновика (GET /get-arknights), нужен секрет t из ссылки кнопки
     async function loadPostData() {
       if (!postId || !token) {
         showFatal('Ссылка неполная. Откройте редактор кнопкой под постом в боте.');
@@ -245,7 +245,7 @@
 
       try {
         const response = await fetch(
-          `${N8N_BASE_URL}/get-post?post_id=${encodeURIComponent(postId)}&t=${encodeURIComponent(token)}`
+          `${N8N_BASE_URL}/get-arknights?post_id=${encodeURIComponent(postId)}&t=${encodeURIComponent(token)}`
         );
         if (!response.ok) {
           throw new Error(`Ошибка сервера (${response.status})`);
@@ -286,7 +286,7 @@
       }
     }
 
-    // Публикация (POST /telegram-edit): отправляем текст и секрет черновика
+    // Публикация (POST /edit-arknights): отправляем текст и секрет черновика
     async function submitData() {
       sending = true;
       saveBtn.disabled = true;
@@ -294,7 +294,7 @@
       statusEl.textContent = '';
 
       try {
-        const response = await fetch(`${N8N_BASE_URL}/telegram-edit`, {
+        const response = await fetch(`${N8N_BASE_URL}/edit-arknights`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
