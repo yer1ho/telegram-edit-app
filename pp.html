@@ -187,3 +187,182 @@
     function sanitize(html) {
       const tpl = document.createElement('template'); // содержимое template не исполняется
       tpl.innerHTML = html;
+      (function walk(node) {
+        Array.from(node.children).forEach(el => {
+          if (!ALLOWED_TAGS.has(el.tagName)) {
+            el.replaceWith(document.createTextNode(el.textContent));
+            return;
+          }
+          Array.from(el.attributes).forEach(attr => {
+            const isSafeHref = el.tagName === 'A' && attr.name === 'href' && /^https?:\/\//i.test(attr.value);
+            if (!isSafeHref) el.removeAttribute(attr.name);
+          });
+          walk(el);
+        });
+      })(tpl.content);
+      return tpl.innerHTML;
+    }
+
+    // Вставка тега вокруг выделения
+    function insertTag(tag) {
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selected = text.substring(start, end);
+      const open = `<${tag}>`;
+      const close = `</${tag}>`;
+
+      textarea.value = text.substring(0, start) + open + selected + close + text.substring(end);
+      textarea.focus();
+      textarea.setSelectionRange(start + open.length, start + open.length + selected.length);
+      updatePreview();
+    }
+
+    // Вставка ссылки: URL берётся из поля рядом с кнопкой
+    function insertLink() {
+      const urlInput = document.getElementById('link-url');
+      const url = urlInput.value.trim();
+      if (!/^https?:\/\//i.test(url)) {
+        statusEl.textContent = 'Введите ссылку, которая начинается с http:// или https://';
+        return;
+      }
+      statusEl.textContent = '';
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const label = text.substring(start, end) || 'ссылка';
+      const safeUrl = url.replace(/"/g, '&quot;');
+      const replacement = `<a href="${safeUrl}">${label}</a>`;
+
+      textarea.value = text.substring(0, start) + replacement + text.substring(end);
+      textarea.focus();
+      urlInput.value = '';
+      updatePreview();
+    }
+
+    // Предпросмотр, счётчик символов и состояние кнопок
+    function updatePreview() {
+      previewBox.innerHTML = sanitize(textarea.value);
+
+      const len = previewBox.textContent.length; // видимая длина без тегов
+      counterEl.textContent = `${len} / ${CAPTION_LIMIT}`;
+      counterEl.classList.toggle('over', len > CAPTION_LIMIT);
+
+      const blocked = !ready || sending || len === 0 || len > CAPTION_LIMIT;
+      saveBtn.disabled = blocked;
+      queueBtn.disabled = blocked;
+    }
+
+    // Картинка поста: показываем только https-ссылку; если не загрузилась, блок скрывается
+    function showPreviewImage(url) {
+      if (!url || !/^https:\/\//i.test(url)) {
+        previewImg.style.display = 'none';
+        return;
+      }
+      previewImg.onerror = () => { previewImg.style.display = 'none'; };
+      previewImg.onload = () => { previewImg.style.display = 'block'; };
+      previewImg.src = url;
+    }
+
+    function showFatal(message) {
+      ready = false;
+      textarea.value = '';
+      textarea.disabled = true;
+      textarea.placeholder = '';
+      previewImg.style.display = 'none';
+      statusEl.textContent = message;
+      updatePreview();
+    }
+
+    // Загрузка текста и картинки черновика (GET /get-pp)
+    async function loadPostData() {
+      if (!postId || !token) {
+        showFatal('Ссылка неполная. Откройте редактор кнопкой под постом в боте.');
+        return;
+      }
+
+      try {
+        const response = await fetch(
+          `${N8N_BASE_URL}/get-pp?post_id=${encodeURIComponent(postId)}&t=${encodeURIComponent(token)}`
+        );
+        if (!response.ok) {
+          throw new Error(`Ошибка сервера (${response.status})`);
+        }
+
+        const data = await response.json();
+        const item = Array.isArray(data) ? data[0] : data;
+
+        if (item && item.error === 'forbidden') {
+          showFatal('Нет доступа к этому черновику. Он мог быть уже опубликован или отклонён.');
+          return;
+        }
+
+        const text = item && item.text ? item.text : '';
+        if (!text) {
+          showFatal('Текст поста не найден. Возможно, черновик уже опубликован или удалён.');
+          return;
+        }
+
+        textarea.value = text;
+        textarea.disabled = false;
+        ready = true;
+        showPreviewImage(item.preview);
+        updatePreview();
+      } catch (err) {
+        console.error(err);
+        showFatal('Не удалось загрузить текст: ' + err.message);
+      }
+    }
+
+    loadPostData();
+
+    // Подтверждение перед действием: 'now' или 'queue'
+    function confirmAndSubmit(mode) {
+      const question = mode === 'queue'
+        ? 'Поставить пост в очередь публикации?'
+        : 'Опубликовать пост в канал?';
+      if (typeof tg.showConfirm === 'function') {
+        tg.showConfirm(question, ok => { if (ok) submitData(mode); });
+      } else if (confirm(question)) {
+        submitData(mode);
+      }
+    }
+
+    // Отправка (POST /edit-pp)
+    async function submitData(mode) {
+      const isQueue = mode === 'queue';
+      sending = true;
+      saveBtn.disabled = true;
+      queueBtn.disabled = true;
+      (isQueue ? queueBtn : saveBtn).innerText = isQueue ? 'Добавление в очередь...' : 'Публикация...';
+      statusEl.textContent = '';
+
+      try {
+        const response = await fetch(`${N8N_BASE_URL}/edit-pp`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            post_id: postId,
+            t: token,
+            text: textarea.value,
+            mode: isQueue ? 'queue' : 'now'
+          })
+        });
+
+        if (!response.ok) {
+          throw new Error(`Ошибка сервера (${response.status})`);
+        }
+
+        tg.close();
+      } catch (err) {
+        statusEl.textContent = (isQueue ? 'Не удалось добавить в очередь: ' : 'Не удалось опубликовать: ') + err.message;
+        sending = false;
+        saveBtn.innerText = SAVE_LABEL;
+        queueBtn.innerText = QUEUE_LABEL;
+        updatePreview();
+      }
+    }
+  </script>
+</body>
+</html>
